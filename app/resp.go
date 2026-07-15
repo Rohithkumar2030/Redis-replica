@@ -1,0 +1,113 @@
+package main
+
+import (
+	"bufio"
+	"fmt"
+	"strconv"
+	"strings"
+)
+
+func encodeNil() string {
+	return "$-1\r\n"
+}
+
+func encodeBulkString(s string) string {
+	return fmt.Sprintf("$%d\r\n%s\r\n", len(s), s)
+}
+
+func encodeSimpleString(s string) string {
+	return fmt.Sprintf("+%s\r\n", s)
+}
+
+func encodeStringArray(arr []string) string {
+	result := fmt.Sprintf("*%d\r\n", len(arr))
+	for _, s := range arr {
+		result += encodeBulkString(s)
+	}
+	return result
+}
+
+func encodeRawSimpleStringArray(arr []string) string {
+	result := fmt.Sprintf("*%d\r\n", len(arr))
+	for _, s := range arr {
+		result += s
+	}
+	return result
+}
+
+func encodeArray(arr []any) string {
+	result := fmt.Sprintf("*%d\r\n", len(arr))
+	if arr == nil {
+		result = "*-1\r\n"
+	}
+	for _, element := range arr {
+		switch value := element.(type) {
+		case string:
+			result += encodeBulkString(value)
+		case int:
+			result += encodeInt(value)
+		case error:
+			result += encodeError(value)
+		case nil:
+			result += "*-1\r\n"
+		case []any:
+			result += encodeArray(value)
+		case []string:
+			result += encodeStringArray(value)
+		default:
+			panic(fmt.Sprintf("not implemented type: %T", element))
+		}
+	}
+	return result
+}
+
+func encodeInt(n int) string {
+	return fmt.Sprintf(":%d\r\n", n)
+}
+
+func encodeError(e error) string {
+	return fmt.Sprintf("-ERR %s\r\n", e.Error())
+}
+
+func encodeErrorType(t string, msg string) string {
+	return fmt.Sprintf("-%s %s\r\n", t, msg)
+}
+
+func decodeStringArray(reader *bufio.Reader) (arr []string, bytesRead int, err error) {
+	var arrSize, strSize int
+	for {
+		var token string
+		token, err = reader.ReadString('\n')
+		if err != nil {
+			return
+		}
+		// HACK: should count bytes properly?
+		bytesRead += len(token)
+		token = strings.TrimRight(token, "\r\n")
+		// TODO: do proper RESP parsing!!!
+		switch {
+		case arrSize == 0 && token[0] == '*':
+			arrSize, err = strconv.Atoi(token[1:])
+			if err != nil {
+				return
+			}
+		case strSize == 0 && token[0] == '$':
+			strSize, err = strconv.Atoi(token[1:])
+			if err != nil {
+				return
+			}
+		default:
+			if len(token) != strSize {
+				fmt.Printf("[from master] Wrong string size - got: %d, want: %d\n", len(token), strSize)
+				break
+			}
+			arrSize--
+			strSize = 0
+			arr = append(arr, token)
+		}
+		if arrSize == 0 {
+			break
+		}
+	}
+	return
+}
